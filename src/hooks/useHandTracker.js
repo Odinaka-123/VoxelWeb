@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useVoxelStore } from '@/store/useVoxelStore'
-import { isPinching, pinchMidpoint, cameraToWorld } from '@/utils/handUtils'
+import { isPinching, pinchMidpoint, cameraToWorld, handOpenness, palmCenter } from '@/utils/handUtils'
 import { snapToGrid } from '@/utils/gridHelpers'
 
 const MEDIAPIPE_WASM =
@@ -12,11 +12,14 @@ export function useHandTracker(videoRef, setStatus) {
   const lastVideoTimeRef = useRef(-1)
   const wasPinchingRef = useRef(false)
   const prevTwoHandDistRef = useRef(null)
+  const prevPalmRef = useRef(null)
 
   const setHandData = useVoxelStore((s) => s.setHandData)
   const setCursor = useVoxelStore((s) => s.setCursor)
   const setPinching = useVoxelStore((s) => s.setPinching)
   const setIsZooming = useVoxelStore((s) => s.setIsZooming)
+  const setIsPanning = useVoxelStore((s) => s.setIsPanning)
+  const setOrbitDelta = useVoxelStore((s) => s.setOrbitDelta)
   const placeVoxel = useVoxelStore((s) => s.placeVoxel)
   const eraseVoxel = useVoxelStore((s) => s.eraseVoxel)
   const setCameraDistance = useVoxelStore((s) => s.setCameraDistance)
@@ -42,7 +45,7 @@ export function useHandTracker(videoRef, setStatus) {
           numHands: 2,
         })
 
-        setStatus?.('✅ Ready — show 1 hand to build, 2 hands to zoom')
+        setStatus?.('✅ Ready')
         if (!cancelled) startLoop()
       } catch (err) {
         console.error('[useHandTracker]', err)
@@ -56,7 +59,6 @@ export function useHandTracker(videoRef, setStatus) {
           rafRef.current = requestAnimationFrame(loop)
           return
         }
-
         const video = videoRef.current
         if (video.readyState < 2) {
           rafRef.current = requestAnimationFrame(loop)
@@ -69,7 +71,7 @@ export function useHandTracker(videoRef, setStatus) {
           const result = landmarkerRef.current.detectForVideo(video, now)
           const count = result.landmarks.length
 
-          // ── TWO HANDS: pinch-to-zoom ──────────────────────────────
+          // ── TWO HANDS: pinch-to-zoom ────────────────────────────────
           if (count === 2) {
             const p0 = isPinching(result.landmarks[0])
             const p1 = isPinching(result.landmarks[1])
@@ -84,9 +86,7 @@ export function useHandTracker(videoRef, setStatus) {
 
               if (prevTwoHandDistRef.current !== null) {
                 const delta = prevTwoHandDistRef.current - dist
-                setCameraDistance((prev) =>
-                  Math.max(2, Math.min(50, prev + delta * 40))
-                )
+                setCameraDistance((prev) => Math.max(2, Math.min(50, prev + delta * 40)))
               }
               prevTwoHandDistRef.current = dist
               setStatus?.('🤏🤏 Zooming...')
@@ -96,45 +96,70 @@ export function useHandTracker(videoRef, setStatus) {
               setStatus?.('✋✋ 2 hands — pinch both to zoom')
             }
 
+            setIsPanning(false)
+            prevPalmRef.current = null
             wasPinchingRef.current = false
             setHandData(result.landmarks[0])
             rafRef.current = requestAnimationFrame(loop)
             return
           }
 
-          // ── NOT TWO HANDS: exit zoom mode ─────────────────────────
           setIsZooming(false)
           prevTwoHandDistRef.current = null
 
-          // ── ONE HAND: build/erase ─────────────────────────────────
+          // ── ONE HAND ────────────────────────────────────────────────
           if (count === 1) {
             const landmarks = result.landmarks[0]
             setHandData(landmarks)
 
             const pinch = isPinching(landmarks)
-            setPinching(pinch)
-            setStatus?.(`🖐 1 hand${pinch ? ' — pinching' : ' — open'}`)
+            const openness = handOpenness(landmarks)
+            const isOpen = openness > 0.7 && !pinch
 
-            const mid = pinchMidpoint(landmarks)
-            const world = cameraToWorld(mid)
-            const snapped = snapToGrid(world)
-            setCursor(snapped)
+            if (isOpen) {
+              setIsPanning(true)
+              setPinching(false)
+              const palm = palmCenter(landmarks)
 
-            if (pinch && !wasPinchingRef.current) {
-              mode === 'build' ? placeVoxel() : eraseVoxel()
+              if (prevPalmRef.current) {
+                // flip azimuth: hand right → camera right (positive azimuth)
+                const dx = palm.x - prevPalmRef.current.x
+                const dy = palm.y - prevPalmRef.current.y
+                setOrbitDelta({ azimuth: dx * 3, polar: dy * 2 })
+              } else {
+                setOrbitDelta({ azimuth: 0, polar: 0 })
+              }
+              prevPalmRef.current = palm
+              setStatus?.('✋ Panning...')
+            } else {
+              setIsPanning(false)
+              prevPalmRef.current = null
+              setPinching(pinch)
+
+              const mid = pinchMidpoint(landmarks)
+              const world = cameraToWorld(mid)
+              const snapped = snapToGrid(world)
+              setCursor(snapped)
+
+              if (pinch && !wasPinchingRef.current) {
+                mode === 'build' ? placeVoxel() : eraseVoxel()
+              }
+              setStatus?.(`🖐 1 hand${pinch ? ' — pinching' : ' — open'}`)
             }
             wasPinchingRef.current = pinch
           } else {
             setHandData(null)
             setPinching(false)
+            setIsPanning(false)
+            prevPalmRef.current = null
             wasPinchingRef.current = false
+            setOrbitDelta({ azimuth: 0, polar: 0 })
             setStatus?.('✅ Ready — show your hand')
           }
         }
 
         rafRef.current = requestAnimationFrame(loop)
       }
-
       rafRef.current = requestAnimationFrame(loop)
     }
 

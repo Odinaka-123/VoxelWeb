@@ -5,10 +5,12 @@ export const useVoxelStore = create((set, get) => ({
   cursor: { x: 0, y: 0, z: 0 },
   isPinching: false,
   isZooming: false,
+  isPanning: false,
   mode: 'build',
   color: '#4fc3f7',
   handData: null,
   cameraDistance: 15,
+  orbitDelta: { azimuth: 0, polar: 0 },
 
   placeVoxel: () => {
     const { cursor, color, voxels } = get()
@@ -31,7 +33,9 @@ export const useVoxelStore = create((set, get) => ({
   setColor: (color) => set({ color }),
   clearAll: () => set({ voxels: {} }),
   setCameraDistance: (updater) => set((s) => ({
-    cameraDistance: typeof updater === 'function' ? updater(s.cameraDistance) : updater
+    cameraDistance: typeof updater === 'function' ? updater(s.cameraDistance) : updater,
   })),
   setIsZooming: (val) => set({ isZooming: val }),
+  setIsPanning: (val) => set({ isPanning: val }),
+  setOrbitDelta: (delta) => set({ orbitDelta: delta }),
 }))

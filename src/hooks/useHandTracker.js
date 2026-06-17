@@ -6,40 +6,48 @@ import { snapToGrid } from '@/utils/gridHelpers'
 const MEDIAPIPE_WASM =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
 
-export function useHandTracker(videoRef) {
+export function useHandTracker(videoRef, setStatus) {
   const landmarkerRef = useRef(null)
   const rafRef = useRef(null)
   const lastVideoTimeRef = useRef(-1)
   const wasPinchingRef = useRef(false)
+  const prevTwoHandDistRef = useRef(null)
 
   const setHandData = useVoxelStore((s) => s.setHandData)
   const setCursor = useVoxelStore((s) => s.setCursor)
   const setPinching = useVoxelStore((s) => s.setPinching)
+  const setIsZooming = useVoxelStore((s) => s.setIsZooming)
   const placeVoxel = useVoxelStore((s) => s.placeVoxel)
   const eraseVoxel = useVoxelStore((s) => s.eraseVoxel)
+  const setCameraDistance = useVoxelStore((s) => s.setCameraDistance)
   const mode = useVoxelStore((s) => s.mode)
 
   useEffect(() => {
     let cancelled = false
 
     async function init() {
-      const { HandLandmarker, FilesetResolver } = await import(
-        '@mediapipe/tasks-vision'
-      )
+      try {
+        setStatus?.('Downloading hand model...')
+        const { HandLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision')
+        setStatus?.('Initialising MediaPipe...')
+        const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM)
 
-      const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM)
+        landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numHands: 2,
+        })
 
-      landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numHands: 1,
-      })
-
-      if (!cancelled) startLoop()
+        setStatus?.('✅ Ready — show 1 hand to build, 2 hands to zoom')
+        if (!cancelled) startLoop()
+      } catch (err) {
+        console.error('[useHandTracker]', err)
+        setStatus?.('❌ Error: ' + err.message)
+      }
     }
 
     function startLoop() {
@@ -59,20 +67,59 @@ export function useHandTracker(videoRef) {
         if (video.currentTime !== lastVideoTimeRef.current) {
           lastVideoTimeRef.current = video.currentTime
           const result = landmarkerRef.current.detectForVideo(video, now)
+          const count = result.landmarks.length
 
-          if (result.landmarks.length > 0) {
+          // ── TWO HANDS: pinch-to-zoom ──────────────────────────────
+          if (count === 2) {
+            const p0 = isPinching(result.landmarks[0])
+            const p1 = isPinching(result.landmarks[1])
+
+            if (p0 && p1) {
+              setIsZooming(true)
+              const mid0 = pinchMidpoint(result.landmarks[0])
+              const mid1 = pinchMidpoint(result.landmarks[1])
+              const dx = mid0.x - mid1.x
+              const dy = mid0.y - mid1.y
+              const dist = Math.sqrt(dx * dx + dy * dy)
+
+              if (prevTwoHandDistRef.current !== null) {
+                const delta = prevTwoHandDistRef.current - dist
+                setCameraDistance((prev) =>
+                  Math.max(2, Math.min(50, prev + delta * 40))
+                )
+              }
+              prevTwoHandDistRef.current = dist
+              setStatus?.('🤏🤏 Zooming...')
+            } else {
+              setIsZooming(false)
+              prevTwoHandDistRef.current = null
+              setStatus?.('✋✋ 2 hands — pinch both to zoom')
+            }
+
+            wasPinchingRef.current = false
+            setHandData(result.landmarks[0])
+            rafRef.current = requestAnimationFrame(loop)
+            return
+          }
+
+          // ── NOT TWO HANDS: exit zoom mode ─────────────────────────
+          setIsZooming(false)
+          prevTwoHandDistRef.current = null
+
+          // ── ONE HAND: build/erase ─────────────────────────────────
+          if (count === 1) {
             const landmarks = result.landmarks[0]
             setHandData(landmarks)
 
             const pinch = isPinching(landmarks)
             setPinching(pinch)
+            setStatus?.(`🖐 1 hand${pinch ? ' — pinching' : ' — open'}`)
 
             const mid = pinchMidpoint(landmarks)
             const world = cameraToWorld(mid)
             const snapped = snapToGrid(world)
             setCursor(snapped)
 
-            // Only trigger on pinch start, not every frame
             if (pinch && !wasPinchingRef.current) {
               mode === 'build' ? placeVoxel() : eraseVoxel()
             }
@@ -81,6 +128,7 @@ export function useHandTracker(videoRef) {
             setHandData(null)
             setPinching(false)
             wasPinchingRef.current = false
+            setStatus?.('✅ Ready — show your hand')
           }
         }
 

@@ -9,8 +9,10 @@ import { useVoxelStore } from '@/store/useVoxelStore'
 function CameraController() {
   const cameraDistance = useVoxelStore((s) => s.cameraDistance)
   const orbitDelta = useVoxelStore((s) => s.orbitDelta)
+  const isPinching = useVoxelStore((s) => s.isPinching)
   const controlsRef = useRef()
   const { camera } = useThree()
+  const velocityRef = useRef({ azimuth: 0, polar: 0 })
 
   useEffect(() => {
     const dir = camera.position.clone().normalize()
@@ -20,15 +22,26 @@ function CameraController() {
 
   useFrame(() => {
     if (!controlsRef.current) return
+    if (isPinching) {
+      velocityRef.current.azimuth = 0
+      velocityRef.current.polar = 0
+      return
+    }
     const { azimuth, polar } = orbitDelta
-    if (Math.abs(azimuth) > 0.001 || Math.abs(polar) > 0.001) {
-      controlsRef.current.setAzimuthalAngle(
-        controlsRef.current.getAzimuthalAngle() + azimuth * 0.8
-      )
+    const active = Math.abs(azimuth) > 0.001 || Math.abs(polar) > 0.001
+    if (active) {
+      velocityRef.current.azimuth = azimuth * 0.8
+      velocityRef.current.polar = polar * 0.8
+    } else {
+      velocityRef.current.azimuth *= 0.92
+      velocityRef.current.polar *= 0.92
+    }
+    const vaz = velocityRef.current.azimuth
+    const vpo = velocityRef.current.polar
+    if (Math.abs(vaz) > 0.0001 || Math.abs(vpo) > 0.0001) {
+      controlsRef.current.setAzimuthalAngle(controlsRef.current.getAzimuthalAngle() + vaz)
       controlsRef.current.setPolarAngle(
-        Math.max(0.1, Math.min(Math.PI - 0.1,
-          controlsRef.current.getPolarAngle() + polar * 0.8
-        ))
+        Math.max(0.1, Math.min(Math.PI - 0.1, controlsRef.current.getPolarAngle() + vpo))
       )
       controlsRef.current.update()
     }

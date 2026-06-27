@@ -6,6 +6,15 @@ import { snapToGrid } from '@/utils/gridHelpers'
 const MEDIAPIPE_WASM =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
 
+function smooth(prev, next, alpha = 0.35) {
+  if (!prev) return next
+  return {
+    x: prev.x + alpha * (next.x - prev.x),
+    y: prev.y + alpha * (next.y - prev.y),
+    z: (prev.z ?? 0) + alpha * ((next.z ?? 0) - (prev.z ?? 0)),
+  }
+}
+
 export function useHandTracker(videoRef, setStatus) {
   const landmarkerRef = useRef(null)
   const rafRef = useRef(null)
@@ -13,6 +22,9 @@ export function useHandTracker(videoRef, setStatus) {
   const wasPinchingRef = useRef(false)
   const prevTwoHandDistRef = useRef(null)
   const prevPalmRef = useRef(null)
+  const prevPalmTimeRef = useRef(null)
+  const smoothedMidRef = useRef(null)
+  const lastSnappedRef = useRef(null)
 
   const setHandData = useVoxelStore((s) => s.setHandData)
   const setCursor = useVoxelStore((s) => s.setCursor)
@@ -71,11 +83,10 @@ export function useHandTracker(videoRef, setStatus) {
           const result = landmarkerRef.current.detectForVideo(video, now)
           const count = result.landmarks.length
 
-          // ── TWO HANDS: pinch-to-zoom ────────────────────────────────
+          // ── TWO HANDS: pinch-to-zoom ──────────────────────────────
           if (count === 2) {
             const p0 = isPinching(result.landmarks[0])
             const p1 = isPinching(result.landmarks[1])
-
             if (p0 && p1) {
               setIsZooming(true)
               const mid0 = pinchMidpoint(result.landmarks[0])
@@ -83,22 +94,22 @@ export function useHandTracker(videoRef, setStatus) {
               const dx = mid0.x - mid1.x
               const dy = mid0.y - mid1.y
               const dist = Math.sqrt(dx * dx + dy * dy)
-
               if (prevTwoHandDistRef.current !== null) {
                 const delta = prevTwoHandDistRef.current - dist
                 setCameraDistance((prev) => Math.max(2, Math.min(50, prev + delta * 40)))
               }
               prevTwoHandDistRef.current = dist
-              setStatus?.('🤏🤏 Zooming...')
+              setStatus?.('Zooming...')
             } else {
               setIsZooming(false)
               prevTwoHandDistRef.current = null
-              setStatus?.('✋✋ 2 hands — pinch both to zoom')
+              setStatus?.('2 hands — pinch both to zoom')
             }
-
             setIsPanning(false)
             prevPalmRef.current = null
+            prevPalmTimeRef.current = null
             wasPinchingRef.current = false
+            smoothedMidRef.current = null
             setHandData(result.landmarks[0])
             rafRef.current = requestAnimationFrame(loop)
             return
@@ -107,7 +118,7 @@ export function useHandTracker(videoRef, setStatus) {
           setIsZooming(false)
           prevTwoHandDistRef.current = null
 
-          // ── ONE HAND ────────────────────────────────────────────────
+          // ── ONE HAND ──────────────────────────────────────────────
           if (count === 1) {
             const landmarks = result.landmarks[0]
             setHandData(landmarks)
@@ -117,34 +128,54 @@ export function useHandTracker(videoRef, setStatus) {
             const isOpen = openness > 0.7 && !pinch
 
             if (isOpen) {
+              smoothedMidRef.current = null
+              lastSnappedRef.current = null
               setIsPanning(true)
               setPinching(false)
               const palm = palmCenter(landmarks)
+              const t = performance.now()
 
-              if (prevPalmRef.current) {
-                // flip azimuth: hand right → camera right (positive azimuth)
+              if (prevPalmRef.current && prevPalmTimeRef.current) {
+                const dt = Math.max(1, t - prevPalmTimeRef.current)
                 const dx = palm.x - prevPalmRef.current.x
                 const dy = palm.y - prevPalmRef.current.y
-                setOrbitDelta({ azimuth: dx * 3, polar: dy * 2 })
+                const speedX = (dx / dt) * 1000
+                const speedY = (dy / dt) * 1000
+                // ── Sensitivity cranked up ──
+                setOrbitDelta({ azimuth: speedX * 0.25, polar: speedY * 0.18 })
               } else {
                 setOrbitDelta({ azimuth: 0, polar: 0 })
               }
+
               prevPalmRef.current = palm
-              setStatus?.('✋ Panning...')
+              prevPalmTimeRef.current = t
+              setStatus?.('Panning...')
             } else {
               setIsPanning(false)
               prevPalmRef.current = null
+              prevPalmTimeRef.current = null
               setPinching(pinch)
 
-              const mid = pinchMidpoint(landmarks)
-              const world = cameraToWorld(mid)
+              const rawMid = pinchMidpoint(landmarks)
+              smoothedMidRef.current = smooth(smoothedMidRef.current, rawMid, 0.2)
+              const world = cameraToWorld(smoothedMidRef.current)
               const snapped = snapToGrid(world)
-              setCursor(snapped)
+
+              const last = lastSnappedRef.current
+              const changed = !last ||
+                last.x !== snapped.x ||
+                last.y !== snapped.y ||
+                last.z !== snapped.z
+
+              if (changed) {
+                lastSnappedRef.current = snapped
+                setCursor(snapped)
+              }
 
               if (pinch && !wasPinchingRef.current) {
                 mode === 'build' ? placeVoxel() : eraseVoxel()
               }
-              setStatus?.(`🖐 1 hand${pinch ? ' — pinching' : ' — open'}`)
+              setStatus?.(`1 hand${pinch ? ' — pinching' : ' — open'}`)
             }
             wasPinchingRef.current = pinch
           } else {
@@ -152,6 +183,9 @@ export function useHandTracker(videoRef, setStatus) {
             setPinching(false)
             setIsPanning(false)
             prevPalmRef.current = null
+            prevPalmTimeRef.current = null
+            smoothedMidRef.current = null
+            lastSnappedRef.current = null
             wasPinchingRef.current = false
             setOrbitDelta({ azimuth: 0, polar: 0 })
             setStatus?.('✅ Ready — show your hand')

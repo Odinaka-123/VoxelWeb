@@ -62,7 +62,7 @@ export default function HUD() {
       {/* Top right — gesture hints */}
       <div style={styles.hints}>
         <Hint Icon={MousePointer2} label="Pinch to place" />
-        <Hint Icon={Hand} label="Open hand to pan" />
+        <Hint Icon={Hand} label="Open a hand to pan" />
         <Hint Icon={ZoomIn} label="Two hands to zoom" />
       </div>
 

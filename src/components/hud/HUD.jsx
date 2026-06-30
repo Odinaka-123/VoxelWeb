@@ -53,7 +53,7 @@ export default function HUD() {
           </span>
           <span style={styles.pillDivider} />
           <span style={{ ...styles.pillText, color: '#94a3b8' }}>
-            <span style={{ color: '#e2e8f0', fontWeight: 700 }}>{voxelCount}</span>
+            <span style={{ color: '#e2e8f0f2', fontWeight: 700 }}>{voxelCount}</span>
             {' '}block{voxelCount !== 1 ? 's' : ''}
           </span>
         </div>

@@ -98,7 +98,7 @@ export default function HUD() {
               key={id}
               active={shape === id}
               onClick={() => setShape(id)}
-              accent="#6366f1"
+              accent="#6365f1ea"
             >
               <Icon size={14} />
               {label}
